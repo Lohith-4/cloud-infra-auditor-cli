@@ -7,6 +7,8 @@ them to provider-specific logic.
 import typer
 from rich.console import Console
 
+from auditor.providers.aws.auth import get_session, get_account_identity, AWSAuthError
+
 app = typer.Typer(
     name="cloud-auditor",
     help="Audit cloud infrastructure for cost-saving opportunities and safely clean up waste.",
@@ -31,13 +33,34 @@ def version():
     console.print("[bold cyan]Cloud Infrastructure Auditor[/bold cyan] v0.1.0")
 
 
+def _connect(profile: str, region: str):
+    """
+    Shared helper: establish an AWS session and confirm identity before
+    any scan proceeds. Prints a clean error and exits if auth fails,
+    rather than crashing with a raw traceback.
+    """
+    try:
+        session = get_session(profile=profile, region=region)
+        identity = get_account_identity(session)
+        console.print(
+            f"[green]Connected[/green] to AWS account "
+            f"[bold]{identity['account_id']}[/bold] as [bold]{identity['arn']}[/bold]"
+        )
+        return session
+    except AWSAuthError as e:
+        console.print(f"[bold red]Authentication failed:[/bold red] {e}")
+        raise typer.Exit(code=1)
+
+
 @scan_app.command("ebs")
 def scan_ebs(
     profile: str = typer.Option("default", help="AWS profile name to use."),
     region: str = typer.Option("us-east-1", help="AWS region to scan."),
 ):
     """Scan for unattached EBS volumes."""
-    console.print(f"[yellow]Placeholder:[/yellow] would scan EBS in {region} using profile '{profile}'")
+    session = _connect(profile, region)
+    console.print(f"[yellow]Placeholder:[/yellow] would scan EBS volumes in {region}")
+    # Real scanning logic (Week 2) will go here, using `session`.
 
 
 @scan_app.command("eip")
@@ -46,7 +69,8 @@ def scan_eip(
     region: str = typer.Option("us-east-1", help="AWS region to scan."),
 ):
     """Scan for unassociated Elastic IPs."""
-    console.print(f"[yellow]Placeholder:[/yellow] would scan Elastic IPs in {region} using profile '{profile}'")
+    session = _connect(profile, region)
+    console.print(f"[yellow]Placeholder:[/yellow] would scan Elastic IPs in {region}")
 
 
 @scan_app.command("ec2")
@@ -56,6 +80,7 @@ def scan_ec2(
     days: int = typer.Option(14, help="Lookback window (days) for CPU utilization."),
 ):
     """Scan for underutilized EC2 instances (low CPU over N days)."""
+    session = _connect(profile, region)
     console.print(f"[yellow]Placeholder:[/yellow] would scan EC2 in {region} over last {days} days")
 
 
