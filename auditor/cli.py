@@ -3,6 +3,7 @@ Cloud Infrastructure Auditor & Cost Optimizer
 Entry point for the CLI. Defines top-level command groups and routes
 them to provider-specific logic.
 """
+from auditor.providers.aws.scanners.ec2 import scan_underutilized_instances
 from auditor.providers.aws.scanners.ebs import scan_unattached_volumes
 from auditor.providers.aws.scanners.eip import scan_unassociated_eips
 import typer
@@ -94,7 +95,6 @@ def scan_eip(
         console.print(f"  • {f['resource_id']} ({f['public_ip']}) — "
                        f"${f['estimated_monthly_cost_usd']}/mo")
 
-
 @scan_app.command("ec2")
 def scan_ec2(
     profile: str = typer.Option("default", help="AWS profile name to use."),
@@ -103,7 +103,18 @@ def scan_ec2(
 ):
     """Scan for underutilized EC2 instances (low CPU over N days)."""
     session = _connect(profile, region)
-    console.print(f"[yellow]Placeholder:[/yellow] would scan EC2 in {region} over last {days} days")
+    findings = scan_underutilized_instances(session, region, days=days)
+
+    if not findings:
+        console.print(f"[green]No underutilized EC2 instances found in {region}.[/green]")
+        return
+
+    total_cost = sum(f["estimated_monthly_cost_usd"] for f in findings)
+    console.print(f"[yellow]Found {len(findings)} underutilized EC2 instance(s)[/yellow] "
+                  f"— estimated waste: [bold red]${total_cost:.2f}/month[/bold red]")
+    for f in findings:
+        console.print(f"  • {f['resource_id']} ({f['name']}) — {f['instance_type']} — "
+                       f"avg CPU {f['avg_cpu_percent']}% — ${f['estimated_monthly_cost_usd']}/mo")
 
 
 if __name__ == "__main__":
