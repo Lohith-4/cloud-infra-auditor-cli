@@ -3,7 +3,8 @@ Cloud Infrastructure Auditor & Cost Optimizer
 Entry point for the CLI. Defines top-level command groups and routes
 them to provider-specific logic.
 """
-
+from auditor.providers.aws.scanners.ebs import scan_unattached_volumes
+from auditor.providers.aws.scanners.eip import scan_unassociated_eips
 import typer
 from rich.console import Console
 
@@ -59,8 +60,18 @@ def scan_ebs(
 ):
     """Scan for unattached EBS volumes."""
     session = _connect(profile, region)
-    console.print(f"[yellow]Placeholder:[/yellow] would scan EBS volumes in {region}")
-    # Real scanning logic (Week 2) will go here, using `session`.
+    findings = scan_unattached_volumes(session, region)
+
+    if not findings:
+        console.print(f"[green]No unattached EBS volumes found in {region}.[/green]")
+        return
+
+    total_cost = sum(f["estimated_monthly_cost_usd"] for f in findings)
+    console.print(f"[yellow]Found {len(findings)} unattached EBS volume(s)[/yellow] "
+                  f"— estimated waste: [bold red]${total_cost:.2f}/month[/bold red]")
+    for f in findings:
+        console.print(f"  • {f['resource_id']} ({f['name']}) — {f['size_gb']}GB "
+                       f"{f['volume_type']} — ${f['estimated_monthly_cost_usd']}/mo")
 
 
 @scan_app.command("eip")
@@ -70,7 +81,18 @@ def scan_eip(
 ):
     """Scan for unassociated Elastic IPs."""
     session = _connect(profile, region)
-    console.print(f"[yellow]Placeholder:[/yellow] would scan Elastic IPs in {region}")
+    findings = scan_unassociated_eips(session, region)
+
+    if not findings:
+        console.print(f"[green]No unassociated Elastic IPs found in {region}.[/green]")
+        return
+
+    total_cost = sum(f["estimated_monthly_cost_usd"] for f in findings)
+    console.print(f"[yellow]Found {len(findings)} unassociated Elastic IP(s)[/yellow] "
+                  f"— estimated waste: [bold red]${total_cost:.2f}/month[/bold red]")
+    for f in findings:
+        console.print(f"  • {f['resource_id']} ({f['public_ip']}) — "
+                       f"${f['estimated_monthly_cost_usd']}/mo")
 
 
 @scan_app.command("ec2")
