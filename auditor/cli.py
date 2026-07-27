@@ -6,6 +6,7 @@ them to provider-specific logic.
 from auditor.providers.aws.scanners.ec2 import scan_underutilized_instances
 from auditor.providers.aws.scanners.ebs import scan_unattached_volumes
 from auditor.providers.aws.scanners.eip import scan_unassociated_eips
+from auditor.reports.aggregator import run_full_audit
 import typer
 from rich.console import Console
 
@@ -116,6 +117,40 @@ def scan_ec2(
         console.print(f"  • {f['resource_id']} ({f['name']}) — {f['instance_type']} — "
                        f"avg CPU {f['avg_cpu_percent']}% — ${f['estimated_monthly_cost_usd']}/mo")
 
+@scan_app.command("all")
+def scan_all(
+    profile: str = typer.Option("default", help="AWS profile name to use."),
+    region: str = typer.Option("us-east-1", help="AWS region to scan."),
+    days: int = typer.Option(14, help="Lookback window (days) for EC2 CPU utilization."),
+):
+    """Run all scanners (EBS, EIP, EC2) and show a combined summary."""
+    session = _connect(profile, region)
+    audit = run_full_audit(session, region, ec2_days=days)
+
+    summary = audit["summary"]
+
+    if summary["total_findings"] == 0:
+        console.print(f"[green]No waste found in {region}. Clean audit![/green]")
+        return
+
+    console.print(
+        f"\n[bold yellow]Audit complete for {region}[/bold yellow] — "
+        f"[bold red]${summary['total_estimated_monthly_cost_usd']}/month[/bold red] "
+        f"in estimated waste across {summary['total_findings']} resource(s)\n"
+    )
+
+    for resource_type, stats in summary["by_resource_type"].items():
+        console.print(
+            f"  [cyan]{resource_type}[/cyan]: {stats['count']} finding(s) — "
+            f"${stats['cost']}/month"
+        )
+
+    console.print("\n[bold]Details:[/bold]")
+    for f in audit["findings"]:
+        console.print(
+            f"  • [{f['resource_type']}] {f['resource_id']} — {f['reason']} "
+            f"— ${f['estimated_monthly_cost_usd']}/mo"
+        )
 
 if __name__ == "__main__":
     app()
