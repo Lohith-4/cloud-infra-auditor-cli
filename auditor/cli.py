@@ -15,6 +15,7 @@ from auditor.reports.aggregator import run_full_audit
 from auditor.reports.formatter import render_findings_table, render_summary_panel
 from pathlib import Path
 from auditor.reports.exporter import export_to_csv, export_to_json
+from auditor.providers.aws.scanners.cleanup import filter_cleanup_eligible, execute_cleanup
 
 app = typer.Typer(
     name="cloud-auditor",
@@ -136,6 +137,77 @@ def report_export(
     console.print("\n[bold green]Exported:[/bold green]")
     for path in exported_files:
         console.print(f"  • {path}")
+
+@cleanup_app.command("run")
+def cleanup_run(
+    profile: str = typer.Option("default", help="AWS profile name to use."),
+    region: str = typer.Option("us-east-1", help="AWS region to scan."),
+    days: int = typer.Option(14, help="Lookback window (days) for EC2 CPU utilization."),
+    execute: bool = typer.Option(
+        False,
+        "--execute",
+        help="Actually delete resources. Without this flag, runs in safe dry-run mode.",
+    ),
+):
+    """
+    Review and clean up flagged EBS volumes and Elastic IPs.
+
+    Defaults to DRY-RUN: shows what would be deleted without touching
+    anything. Pass --execute to actually delete resources (requires
+    typed confirmation).
+    """
+    session = _connect(profile, region)
+    audit = run_full_audit(session, region, ec2_days=days)
+
+    eligible = filter_cleanup_eligible(audit["findings"])
+
+    if not eligible:
+        console.print(f"[green]No cleanup-eligible resources found in {region}.[/green]")
+        return
+
+    total_savings = round(sum(f["estimated_monthly_cost_usd"] for f in eligible), 2)
+
+    if not execute:
+        console.print(
+            f"\n[bold yellow]DRY RUN[/bold yellow] — {len(eligible)} resource(s) "
+            f"would be deleted, saving [bold green]${total_savings}/month[/bold green]:\n"
+        )
+        render_findings_table(console, eligible, title=f"Cleanup Preview — {region}")
+        console.print(
+            "\n[dim]No changes were made. Re-run with --execute to actually delete these.[/dim]"
+        )
+        return
+
+    # --execute path: real deletion, requires explicit typed confirmation
+    console.print(
+        f"\n[bold red]WARNING: DESTRUCTIVE ACTION[/bold red] — about to permanently "
+        f"delete {len(eligible)} resource(s), saving ${total_savings}/month:\n"
+    )
+    render_findings_table(console, eligible, title=f"About to Delete — {region}")
+
+    confirmation_phrase = f"delete {len(eligible)}"
+    console.print(
+        f"\n[bold]To confirm, type exactly:[/bold] [bold cyan]{confirmation_phrase}[/bold cyan]"
+    )
+    user_input = typer.prompt("Confirmation")
+
+    if user_input.strip() != confirmation_phrase:
+        console.print("[yellow]Confirmation did not match. Cleanup cancelled — nothing was deleted.[/yellow]")
+        raise typer.Exit(code=1)
+
+    console.print("\n[bold red]Deleting resources...[/bold red]")
+    result = execute_cleanup(session, region, eligible)
+
+    console.print(
+        f"\n[bold green]Cleanup complete:[/bold green] "
+        f"{result['total_deleted']} deleted, {result['total_failed']} failed. "
+        f"Estimated savings: [bold green]${result['total_monthly_savings_usd']}/month[/bold green]"
+    )
+
+    if result["failed"]:
+        console.print("\n[bold red]Failures:[/bold red]")
+        for failure in result["failed"]:
+            console.print(f"  • {failure['finding']['resource_id']}: {failure['error']}")
 
 
 if __name__ == "__main__":
